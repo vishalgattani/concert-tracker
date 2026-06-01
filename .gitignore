@@ -11,3 +11,5 @@ dist/
 # Next.js
 web/.next/
 web/node_modules/
+.vercel
+.env*
