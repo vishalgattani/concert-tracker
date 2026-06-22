@@ -87,12 +87,32 @@ export default function EventMap() {
                 rel="noopener noreferrer"
                 style={{ fontSize: 12, color: '#0070f3', marginTop: 6, display: 'block' }}
               >
-                View on EDMTrain →
+                View on Edmtrain →
               </a>
             </div>
           </Popup>
         )}
       </Map>
+
+      <a
+        href="https://edmtrain.com"
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{
+          position: 'fixed',
+          bottom: 12,
+          right: 12,
+          background: 'rgba(0,0,0,0.6)',
+          color: '#fff',
+          padding: '4px 8px',
+          borderRadius: 4,
+          fontSize: 11,
+          textDecoration: 'none',
+          zIndex: 10,
+        }}
+      >
+        Powered by Edmtrain
+      </a>
 
       {error && (
         <div

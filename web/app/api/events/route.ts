@@ -136,6 +136,11 @@ const DUMMY_EVENTS: Event[] = [
   },
 ]
 
+function filterFutureEvents(events: Event[]): Event[] {
+  const today = new Date().toISOString().slice(0, 10)
+  return events.filter((e) => e.date >= today)
+}
+
 export async function GET(req: NextRequest) {
   const key = process.env.EDMTRAIN_API_KEY
   if (key) {
@@ -149,8 +154,11 @@ export async function GET(req: NextRequest) {
       `&includeElectronicGenreInd=true&client=${key}`
     const upstream = await fetch(url, { next: { revalidate: 3600 } })
     const data = await upstream.json()
+    if (data.success && Array.isArray(data.data)) {
+      data.data = filterFutureEvents(data.data)
+    }
     return NextResponse.json(data)
   }
 
-  return NextResponse.json({ data: DUMMY_EVENTS, success: true })
+  return NextResponse.json({ data: filterFutureEvents(DUMMY_EVENTS), success: true })
 }
