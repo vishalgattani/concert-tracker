@@ -1,6 +1,6 @@
 # concert-tracker
 
-CLI tool + interactive EDM event map. CLI uses Ticketmaster; web map uses EDMTrain + Mapbox, hosted on Vercel.
+CLI tool + interactive music event map. CLI uses Ticketmaster; web map uses Ticketmaster Discovery API v2 + Mapbox, hosted on Vercel.
 
 ## CLI
 
@@ -17,7 +17,7 @@ Events are printed to terminal and saved to `events.json`.
 
 ## Web Map (`web/`)
 
-Interactive map of EDM events powered by [EDMTrain](https://edmtrain.com) and Mapbox.
+Interactive map of music events for the next 7 days, powered by [Ticketmaster Discovery API v2](https://developer.ticketmaster.com/products-and-docs/apis/discovery-api/v2/) and Mapbox.
 
 Live site: https://concert-tracker-gamma.vercel.app
 
@@ -29,32 +29,48 @@ npm install
 npm run dev   # http://localhost:3000
 ```
 
-The map runs on dummy Bay Area data by default. To use live EDMTrain data, add your API key (see below).
-
-### Adding your EDMTrain API key
-
-Get a key at https://edmtrain.com/dev-api, then add it to Vercel:
-
-```bash
-cd concert-tracker/web
-echo "your-edmtrain-key" | vercel env add EDMTRAIN_API_KEY production
-```
-
-The `/api/events` route automatically switches from dummy data to live EDMTrain events once `EDMTRAIN_API_KEY` is set.
-
-### Deploying to Vercel
-
-```bash
-cd concert-tracker/web
-NEXT_PUBLIC_MAPBOX_TOKEN="your-mapbox-pk-token" vercel build --prod && vercel deploy --prebuilt --prod
-```
-
-> **Note:** `NEXT_PUBLIC_MAPBOX_TOKEN` must be passed at build time so it gets baked into the client bundle. `EDMTRAIN_API_KEY` is server-side only and does not need to be passed here — Vercel injects it at runtime.
-
 ### Environment variables
 
 | Variable | Where | Description |
 |----------|-------|-------------|
 | `NEXT_PUBLIC_MAPBOX_TOKEN` | build-time | Mapbox public token (`pk.*`) |
-| `MAPBOX_SECRET_TOKEN` | Vercel (server) | Mapbox secret token (`sk.*`) |
-| `EDMTRAIN_API_KEY` | Vercel (server) | EDMTrain client key — leave unset to use dummy data |
+| `TICKETMASTER_API_KEY` | server (runtime) | Ticketmaster Discovery API consumer key |
+
+Add to `web/.env.local` for local dev. For Vercel production:
+
+```bash
+cd web
+echo "your-key" | vercel env add TICKETMASTER_API_KEY production
+```
+
+### Ticketmaster Discovery API v2
+
+Docs: https://developer.ticketmaster.com/products-and-docs/apis/discovery-api/v2/
+
+The `/api/events` route queries:
+
+```
+GET https://app.ticketmaster.com/discovery/v2/events.json
+  ?apikey=<key>
+  &city=San Francisco
+  &classificationName=music
+  &startDateTime=<today T00:00:00Z>
+  &endDateTime=<+6 days T23:59:59Z>
+  &size=50
+  &sort=date,asc
+```
+
+Accepts an optional `?city=` query param to search other cities.
+
+### Deploying to Vercel
+
+Deploys automatically via the nightly GitHub Actions workflow (`.github/workflows/deploy.yml`, runs 11pm PT). Requires GitHub environment secrets `VERCEL_TOKEN` and `NEXT_PUBLIC_MAPBOX_TOKEN` under the `production` environment.
+
+To deploy manually:
+
+```bash
+cd web
+npx vercel pull --yes --environment=production --token=<VERCEL_TOKEN>
+NEXT_PUBLIC_MAPBOX_TOKEN="pk...." npx vercel build --prod --token=<VERCEL_TOKEN>
+npx vercel deploy --prebuilt --prod --token=<VERCEL_TOKEN>
+```

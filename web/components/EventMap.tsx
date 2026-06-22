@@ -3,8 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Map, { Marker, Popup, NavigationControl } from 'react-map-gl'
 import type { MapRef } from 'react-map-gl'
-import type { Event } from '@/lib/edmtrain'
-import { eventDisplayName } from '@/lib/edmtrain'
+import type { Event } from '@/lib/events'
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN!
 
@@ -58,7 +57,7 @@ export default function EventMap() {
           NEXT 7 DAYS
         </div>
         {events.length === 0 && !error && (
-          <div style={{ padding: '16px', fontSize: 13, color: '#666' }}>No events today.</div>
+          <div style={{ padding: '16px', fontSize: 13, color: '#666' }}>No events found.</div>
         )}
         {events.map((event) => {
           const isSelected = selected?.id === event.id
@@ -78,14 +77,14 @@ export default function EventMap() {
                 width: '100%',
               }}
             >
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 3 }}>
-                {eventDisplayName(event)}
-              </div>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 3 }}>{event.name}</div>
               <div style={{ fontSize: 12, color: '#888' }}>{event.venue.name}</div>
               <div style={{ fontSize: 12, color: '#666', marginTop: 2 }}>
                 {event.date} · {event.startTime ? event.startTime.slice(0, 5) : 'TBA'}
-                {event.ages && ` · ${event.ages}`}
-                {event.festivalInd && ' · Festival'}
+                {' · '}
+                <span style={{ color: event.source === 'EDMTrain' ? '#7c3aed' : '#0070f3' }}>
+                  {event.source}
+                </span>
               </div>
             </button>
           )
@@ -112,9 +111,7 @@ export default function EventMap() {
               onClick={() => selectEvent(event)}
               style={{ cursor: 'pointer' }}
             >
-              <span style={{ fontSize: 24 }} title={eventDisplayName(event)}>
-                🎵
-              </span>
+              <span style={{ fontSize: 24 }} title={event.name}>🎵</span>
             </Marker>
           ))}
 
@@ -127,65 +124,43 @@ export default function EventMap() {
               closeOnClick={false}
             >
               <div style={{ maxWidth: 220, padding: '4px 2px' }}>
-                <strong style={{ display: 'block', marginBottom: 4 }}>
-                  {eventDisplayName(selected)}
-                </strong>
+                <strong style={{ display: 'block', marginBottom: 4 }}>{selected.name}</strong>
                 <div style={{ fontSize: 13, color: '#555' }}>{selected.venue.name}</div>
                 <div style={{ fontSize: 13, color: '#555' }}>{selected.venue.location}</div>
                 <div style={{ fontSize: 13, marginTop: 4 }}>
                   📅 {selected.date}
                   {selected.startTime && ` · ${selected.startTime.slice(0, 5)}`}
                 </div>
-                <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>
-                  {selected.ages}
-                  {selected.festivalInd && ' · Festival'}
-                </div>
+                {selected.priceMin !== null && (
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>
+                    💰 ${selected.priceMin}–${selected.priceMax}
+                  </div>
+                )}
                 <a
-                  href={selected.link}
+                  href={selected.url}
                   target="_blank"
                   rel="noopener noreferrer"
                   style={{ fontSize: 12, color: '#0070f3', marginTop: 6, display: 'block' }}
                 >
-                  View on Edmtrain →
+                  Buy tickets →
                 </a>
               </div>
             </Popup>
           )}
         </Map>
 
-        <a
-          href="https://edmtrain.com"
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{
-            position: 'absolute',
-            bottom: 12,
-            right: 12,
-            background: 'rgba(0,0,0,0.6)',
-            color: '#fff',
-            padding: '4px 8px',
-            borderRadius: 4,
-            fontSize: 11,
-            textDecoration: 'none',
-          }}
-        >
-          Powered by Edmtrain
-        </a>
-
         {error && (
-          <div
-            style={{
-              position: 'absolute',
-              bottom: 16,
-              left: '50%',
-              transform: 'translateX(-50%)',
-              background: '#ff4444',
-              color: '#fff',
-              padding: '8px 16px',
-              borderRadius: 6,
-              fontSize: 14,
-            }}
-          >
+          <div style={{
+            position: 'absolute',
+            bottom: 16,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: '#ff4444',
+            color: '#fff',
+            padding: '8px 16px',
+            borderRadius: 6,
+            fontSize: 14,
+          }}>
             {error}
           </div>
         )}

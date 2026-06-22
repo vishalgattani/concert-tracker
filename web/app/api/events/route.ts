@@ -1,35 +1,39 @@
 import { NextRequest, NextResponse } from 'next/server'
-
-function dateWindow(): { start: string; end: string } {
-  const start = new Date()
-  const end = new Date(start)
-  end.setDate(end.getDate() + 6)
-  return {
-    start: start.toISOString().slice(0, 10),
-    end: end.toISOString().slice(0, 10),
-  }
-}
+import { fetchEvents as fetchTM } from '@/lib/ticketmaster'
+import { fetchEvents as fetchEDT } from '@/lib/edmtrain'
+import type { Event } from '@/lib/events'
 
 export async function GET(req: NextRequest) {
-  const key = process.env.EDMTRAIN_API_KEY
-  if (!key) {
-    return NextResponse.json({ success: false, message: 'EDMTRAIN_API_KEY not configured' }, { status: 503 })
+  const tmKey = process.env.TICKETMASTER_API_KEY
+  const edtKey = process.env.EDMTRAIN_API_KEY
+
+  if (!tmKey && !edtKey) {
+    return NextResponse.json({ success: false, message: 'No API keys configured' }, { status: 503 })
   }
 
   const { searchParams } = req.nextUrl
-  const latitude = searchParams.get('lat') ?? '37.77'
-  const longitude = searchParams.get('lng') ?? '-122.41'
-  const state = searchParams.get('state') ?? 'California'
-  const url =
-    `https://edmtrain.com/api/events` +
-    `?latitude=${latitude}&longitude=${longitude}&state=${state}` +
-    `&includeElectronicGenreInd=true&client=${key}`
+  const city = searchParams.get('city') ?? 'San Francisco'
 
-  const upstream = await fetch(url, { next: { revalidate: 3600 } })
-  const data = await upstream.json()
-  if (data.success && Array.isArray(data.data)) {
-    const { start, end } = dateWindow()
-    data.data = data.data.filter((e: { date: string }) => e.date >= start && e.date <= end)
-  }
-  return NextResponse.json(data)
+  const [tmResult, edtResult] = await Promise.allSettled([
+    tmKey ? fetchTM(tmKey, city) : Promise.resolve([] as Event[]),
+    edtKey ? fetchEDT(edtKey) : Promise.resolve([] as Event[]),
+  ])
+
+  const tmEvents = tmResult.status === 'fulfilled' ? tmResult.value : []
+  const edtEvents = edtResult.status === 'fulfilled' ? edtResult.value : []
+
+  // Dedupe: if an EDMTrain event has the same venue coords + date as a TM event, drop the TM one
+  // (EDMTrain links are more specific for electronic events)
+  const edtKeys = new Set(
+    edtEvents.map((e) => `${e.venue.latitude.toFixed(3)},${e.venue.longitude.toFixed(3)},${e.date}`)
+  )
+  const filteredTM = tmEvents.filter(
+    (e) => !edtKeys.has(`${e.venue.latitude.toFixed(3)},${e.venue.longitude.toFixed(3)},${e.date}`)
+  )
+
+  const events = [...edtEvents, ...filteredTM].sort((a, b) =>
+    a.date === b.date ? (a.startTime ?? '').localeCompare(b.startTime ?? '') : a.date.localeCompare(b.date)
+  )
+
+  return NextResponse.json({ success: true, data: events })
 }
