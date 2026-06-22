@@ -5,6 +5,7 @@ import Map, { Marker, Popup, NavigationControl, Source, Layer } from 'react-map-
 import type { MapRef, LngLatBoundsLike, MapLayerMouseEvent } from 'react-map-gl'
 import type { Event } from '@/lib/events'
 import { haversineMiles } from '@/lib/events'
+import DeployCountdown from './DeployCountdown'
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN!
 const MAX_RADIUS_MILES = 50
@@ -36,6 +37,14 @@ function makeCircleGeoJSON(center: [number, number], radiusMiles: number) {
   return { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [coords] } }] }
 }
 
+interface SetlistEntry {
+  date: string
+  venue: string
+  city: string
+  songs: string[]
+  url: string
+}
+
 export default function EventMap() {
   const [events, setEvents] = useState<Event[]>([])
   const [selected, setSelected] = useState<Event | null>(null)
@@ -44,6 +53,11 @@ export default function EventMap() {
   const boundsRef = useRef<LngLatBoundsLike | null>(null)
 
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+
+  // Setlist enrichment for selected event popup
+  const [setlists, setSetlists] = useState<SetlistEntry[] | null>(null)
+  const [setlistLoading, setSetlistLoading] = useState(false)
 
   // Radius mode state
   const [radiusMode, setRadiusMode] = useState(false)
@@ -52,7 +66,6 @@ export default function EventMap() {
   const [radiusEvents, setRadiusEvents] = useState<Event[] | null>(null)
   const [radiusLoading, setRadiusLoading] = useState(false)
 
-  // Refs to avoid stale closures in map event handlers
   const dragRef = useRef<{ active: boolean; center: [number, number] | null; miles: number }>({
     active: false, center: null, miles: 0,
   })
@@ -76,6 +89,25 @@ export default function EventMap() {
     mapRef.current?.fitBounds(bounds, { padding: 60, duration: 800, maxZoom: 13 })
   }, [events])
 
+  // Fetch setlist when an event is selected.
+  // 400ms debounce + AbortController: quick popup closes skip the API call entirely,
+  // keeping usage well under setlist.fm's 1440/day limit.
+  useEffect(() => {
+    if (!selected) { setSetlists(null); return }
+    setSetlists(null)
+    setSetlistLoading(false)
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      setSetlistLoading(true)
+      fetch(`/api/setlist?artist=${encodeURIComponent(selected.name)}`, { signal: controller.signal })
+        .then((r) => r.json())
+        .then((body) => setSetlists(body.success ? body.setlists : []))
+        .catch((err) => { if (err.name !== 'AbortError') setSetlists([]) })
+        .finally(() => setSetlistLoading(false))
+    }, 400)
+    return () => { clearTimeout(timer); controller.abort() }
+  }, [selected?.id])
+
   const selectEvent = useCallback((event: Event) => {
     setSelected(event)
     mapRef.current?.flyTo({ center: [event.venue.longitude, event.venue.latitude], zoom: 14, duration: 600 })
@@ -90,12 +122,10 @@ export default function EventMap() {
 
   const handlePopupClose = useCallback(() => setSelected(null), [])
 
-  // Toggle radius draw mode
   const toggleRadiusMode = useCallback(() => {
     const next = !radiusModeRef.current
     setRadiusMode(next)
     if (!next) {
-      // Exit: clear radius state, restore default view
       dragRef.current = { active: false, center: null, miles: 0 }
       setRadiusCenter(null)
       setRadiusMiles(0)
@@ -107,7 +137,6 @@ export default function EventMap() {
     }
   }, [])
 
-  // Map mouse handlers for radius draw
   const handleMouseDown = useCallback((e: MapLayerMouseEvent) => {
     if (!radiusModeRef.current) return
     const center: [number, number] = [e.lngLat.lng, e.lngLat.lat]
@@ -132,7 +161,7 @@ export default function EventMap() {
     if (!radiusModeRef.current || !dragRef.current.active || !dragRef.current.center) return
     dragRef.current.active = false
     const { center, miles } = dragRef.current
-    if (miles < 0.5) return // ignore tiny clicks
+    if (miles < 0.5) return
 
     setRadiusLoading(true)
     try {
@@ -150,38 +179,87 @@ export default function EventMap() {
 
   const displayEvents = radiusEvents ?? events
 
+  // Filter sidebar list by search query (map markers unchanged)
+  const q = searchQuery.toLowerCase().trim()
+  const filteredEvents = q
+    ? displayEvents.filter((e) =>
+        e.name.toLowerCase().includes(q) || e.venue.name.toLowerCase().includes(q),
+      )
+    : displayEvents
+
   return (
     <div style={{ display: 'flex', width: '100vw', height: '100vh' }}>
       {/* Sidebar */}
-      <div style={{ width: sidebarOpen ? 280 : 0, flexShrink: 0, background: '#111', color: '#eee', overflowY: 'auto', display: 'flex', flexDirection: 'column', zIndex: 1, transition: 'width 0.2s ease', overflow: 'hidden' }}>
-        <div style={{ width: 280, display: 'flex', flexDirection: 'column', flex: 1 }}>
-        <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid #222', fontSize: 13, fontWeight: 600, color: '#aaa', letterSpacing: '0.05em', display: 'flex', justifyContent: 'space-between', alignItems: 'center', whiteSpace: 'nowrap' }}>
-          <span>{radiusEvents !== null ? `RADIUS RESULTS (${displayEvents.length})` : 'NEXT 7 DAYS'}</span>
-          <button onClick={() => setSidebarOpen(false)} style={{ background: 'none', border: 'none', color: '#555', cursor: 'pointer', fontSize: 16, padding: '0 0 0 8px', lineHeight: 1 }}>✕</button>
-        </div>
-        {displayEvents.length === 0 && !error && (
-          <div style={{ padding: '16px', fontSize: 13, color: '#666' }}>
-            {radiusLoading ? 'Searching…' : radiusMode && radiusCenter ? 'No events in this radius.' : 'No events found.'}
+      <div style={{ width: sidebarOpen ? 280 : 0, flexShrink: 0, background: '#111', color: '#eee', display: 'flex', flexDirection: 'column', zIndex: 1, transition: 'width 0.2s ease', overflow: 'hidden' }}>
+        <div style={{ width: 280, display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+
+          {/* Header */}
+          <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid #222', fontSize: 13, fontWeight: 600, color: '#aaa', letterSpacing: '0.05em', display: 'flex', justifyContent: 'space-between', alignItems: 'center', whiteSpace: 'nowrap', flexShrink: 0 }}>
+            <span>
+              {radiusEvents !== null ? 'RADIUS RESULTS' : 'NEXT 7 DAYS'}
+              {' '}
+              <span style={{ color: '#555', fontWeight: 400 }}>
+                ({filteredEvents.length}{q && filteredEvents.length !== displayEvents.length ? `/${displayEvents.length}` : ''})
+              </span>
+            </span>
+            <button onClick={() => setSidebarOpen(false)} style={{ background: 'none', border: 'none', color: '#555', cursor: 'pointer', fontSize: 16, padding: '0 0 0 8px', lineHeight: 1 }}>✕</button>
           </div>
-        )}
-        {displayEvents.map((event) => {
-          const isSelected = selected?.id === event.id
-          return (
-            <button key={event.id} onClick={() => selectEvent(event)} style={{
-              textAlign: 'left', background: isSelected ? '#1a1a2e' : 'transparent', border: 'none',
-              borderBottom: '1px solid #1a1a1a', borderLeft: isSelected ? '3px solid #0070f3' : '3px solid transparent',
-              padding: '12px 14px', cursor: 'pointer', color: '#eee', width: '100%',
-            }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 3 }}>{event.name}</div>
-              <div style={{ fontSize: 12, color: '#888' }}>{event.venue.name}</div>
-              <div style={{ fontSize: 12, color: '#666', marginTop: 2 }}>
-                {event.date} · {event.startTime ? event.startTime.slice(0, 5) : 'TBA'}
-                {' · '}
-                <span style={{ color: event.source === 'EDMTrain' ? '#7c3aed' : '#0070f3' }}>{event.source}</span>
+
+          {/* Search bar */}
+          <div style={{ padding: '8px 10px', borderBottom: '1px solid #1a1a1a', flexShrink: 0 }}>
+            <div style={{ position: 'relative' }}>
+              <span style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#555', fontSize: 13, pointerEvents: 'none' }}>🔍</span>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search artist or venue…"
+                style={{
+                  width: '100%', background: '#1a1a1a', border: '1px solid #2a2a2a',
+                  borderRadius: 6, padding: '7px 28px 7px 28px', fontSize: 13, color: '#eee',
+                  outline: 'none', boxSizing: 'border-box',
+                }}
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#555', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 2 }}
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Event list */}
+          <div style={{ overflowY: 'auto', flex: 1 }}>
+            {filteredEvents.length === 0 && (
+              <div style={{ padding: '16px', fontSize: 13, color: '#666' }}>
+                {radiusLoading ? 'Searching…'
+                  : q ? `No results for "${searchQuery}"`
+                  : radiusMode && radiusCenter ? 'No events in this radius.'
+                  : 'No events found.'}
               </div>
-            </button>
-          )
-        })}
+            )}
+            {filteredEvents.map((event) => {
+              const isSelected = selected?.id === event.id
+              return (
+                <button key={event.id} onClick={() => selectEvent(event)} style={{
+                  textAlign: 'left', background: isSelected ? '#1a1a2e' : 'transparent', border: 'none',
+                  borderBottom: '1px solid #1a1a1a', borderLeft: isSelected ? '3px solid #0070f3' : '3px solid transparent',
+                  padding: '12px 14px', cursor: 'pointer', color: '#eee', width: '100%',
+                }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 3 }}>{event.name}</div>
+                  <div style={{ fontSize: 12, color: '#888' }}>{event.venue.name}</div>
+                  <div style={{ fontSize: 12, color: '#666', marginTop: 2 }}>
+                    {event.date} · {event.startTime ? event.startTime.slice(0, 5) : 'TBA'}
+                    {' · '}
+                    <span style={{ color: event.source === 'EDMTrain' ? '#7c3aed' : '#0070f3' }}>{event.source}</span>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
         </div>
       </div>
 
@@ -198,7 +276,7 @@ export default function EventMap() {
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
         >
-          <NavigationControl position="top-right" />
+          <NavigationControl position="top-right" showCompass={false} />
 
           {/* Radius circle overlay */}
           {radiusCenter && radiusMiles > 0 && (
@@ -208,7 +286,6 @@ export default function EventMap() {
             </Source>
           )}
 
-          {/* Center pin */}
           {radiusCenter && (
             <Marker longitude={radiusCenter[0]} latitude={radiusCenter[1]} anchor="center">
               <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#0070f3', border: '2px solid #fff' }} />
@@ -224,9 +301,9 @@ export default function EventMap() {
 
           {selected && (
             <Popup longitude={selected.venue.longitude} latitude={selected.venue.latitude}
-              anchor="top" onClose={handlePopupClose} closeOnClick={false}>
-              <div style={{ maxWidth: 220, padding: '4px 2px' }}>
-                <strong style={{ display: 'block', marginBottom: 4 }}>{selected.name}</strong>
+              anchor="top" onClose={handlePopupClose} closeOnClick={false} maxWidth="280px">
+              <div style={{ padding: '4px 2px' }}>
+                <strong style={{ display: 'block', marginBottom: 4, fontSize: 14 }}>{selected.name}</strong>
                 <div style={{ fontSize: 13, color: '#555' }}>{selected.venue.name}</div>
                 <div style={{ fontSize: 13, color: '#555' }}>{selected.venue.location}</div>
                 <div style={{ fontSize: 13, marginTop: 4 }}>
@@ -239,6 +316,35 @@ export default function EventMap() {
                   style={{ fontSize: 12, color: '#0070f3', marginTop: 6, display: 'block' }}>
                   Buy tickets →
                 </a>
+
+                {/* Setlist.fm enrichment */}
+                <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid #eee' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#999', letterSpacing: '0.05em', marginBottom: 5 }}>
+                    RECENT SETLISTS
+                  </div>
+                  {setlistLoading && <div style={{ fontSize: 12, color: '#aaa' }}>Loading…</div>}
+                  {!setlistLoading && setlists !== null && setlists.length === 0 && (
+                    <div style={{ fontSize: 12, color: '#bbb' }}>No setlists found on setlist.fm</div>
+                  )}
+                  {!setlistLoading && setlists && setlists.map((sl, i) => (
+                    <div key={i} style={{ marginBottom: i < setlists.length - 1 ? 8 : 0 }}>
+                      <a href={sl.url} target="_blank" rel="noopener noreferrer"
+                        style={{ fontSize: 11, color: '#777', textDecoration: 'none', display: 'block', marginBottom: 3 }}>
+                        📍 {sl.venue}, {sl.city} · {sl.date}
+                      </a>
+                      {sl.songs.length > 0 ? (
+                        <div style={{ fontSize: 12, color: '#444', lineHeight: 1.5 }}>
+                          {sl.songs.slice(0, 5).join(' · ')}
+                          {sl.songs.length > 5 && (
+                            <span style={{ color: '#aaa' }}> +{sl.songs.length - 5} more</span>
+                          )}
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 12, color: '#bbb' }}>Setlist not recorded</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             </Popup>
           )}
@@ -257,7 +363,7 @@ export default function EventMap() {
           ☰ {sidebarOpen ? 'Hide List' : 'Show List'}{!sidebarOpen && displayEvents.length > 0 ? ` (${displayEvents.length})` : ''}
         </button>
 
-        {/* Radius mode toggle button */}
+        {/* Radius mode toggle */}
         <button onClick={toggleRadiusMode} title={radiusMode ? 'Exit radius search' : 'Draw radius to search'} style={{
           position: 'absolute', top: 10, left: 10,
           background: radiusMode ? '#0070f3' : '#fff',
@@ -270,22 +376,23 @@ export default function EventMap() {
           ⊙ {radiusMode ? 'Exit Radius Search' : 'Radius Search'}
         </button>
 
-        {/* Live radius readout while dragging */}
+        {/* Live radius readout */}
         {radiusMode && radiusMiles > 0.5 && (
           <div style={{
             position: 'absolute', top: 90, left: 10,
             background: 'rgba(0,0,0,0.75)', color: '#fff',
             borderRadius: 6, padding: '4px 10px', fontSize: 13, pointerEvents: 'none',
           }}>
-            {radiusMiles >= MAX_RADIUS_MILES
-              ? `${MAX_RADIUS_MILES} mi (max)`
-              : `${radiusMiles.toFixed(1)} mi`}
+            {radiusMiles >= MAX_RADIUS_MILES ? `${MAX_RADIUS_MILES} mi (max)` : `${radiusMiles.toFixed(1)} mi`}
           </div>
         )}
 
-        {/* Reset view button — below +/- controls */}
+        {/* Deploy countdown — above zoom controls */}
+        <DeployCountdown />
+
+        {/* Reset view — below zoom controls */}
         <button onClick={resetView} title="Reset view" style={{
-          position: 'absolute', top: 110, right: 10,
+          position: 'absolute', top: 160, right: 10,
           width: 30, height: 30, background: '#fff', border: 'none', borderRadius: 4,
           boxShadow: '0 0 0 2px rgba(0,0,0,0.2)', cursor: 'pointer', fontSize: 16,
           display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
