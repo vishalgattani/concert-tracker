@@ -22,6 +22,13 @@ jobs:
         run: npm ci
         working-directory: web
 
+      - name: Pull Vercel project settings
+        run: npx vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+        working-directory: web
+        env:
+          VERCEL_ORG_ID: team_ScbUahw2QbWHpPXESXiLbexa
+          VERCEL_PROJECT_ID: prj_vq5kiT63LmCYz8g2hEaCZSYMageO
+
       - name: Build
         run: npx vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
         working-directory: web
