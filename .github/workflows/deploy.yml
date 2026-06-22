@@ -19,7 +19,6 @@ jobs:
       - name: Deploy to Vercel
         timeout-minutes: 10
         run: npx vercel --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
-        working-directory: web
         env:
           VERCEL_ORG_ID: team_ScbUahw2QbWHpPXESXiLbexa
           VERCEL_PROJECT_ID: prj_vq5kiT63LmCYz8g2hEaCZSYMageO
