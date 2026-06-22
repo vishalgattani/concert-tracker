@@ -2,15 +2,27 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Map, { Marker, Popup, NavigationControl } from 'react-map-gl'
-import type { MapRef } from 'react-map-gl'
+import type { MapRef, LngLatBoundsLike } from 'react-map-gl'
 import type { Event } from '@/lib/events'
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN!
 
-const INITIAL_VIEW = {
-  longitude: -122.41,
-  latitude: 37.77,
-  zoom: 10,
+const FALLBACK_VIEW = {
+  longitude: -122.15,
+  latitude: 37.55,
+  zoom: 9,
+}
+
+function computeBounds(events: Event[]): LngLatBoundsLike | null {
+  if (events.length === 0) return null
+  let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity
+  for (const e of events) {
+    minLng = Math.min(minLng, e.venue.longitude)
+    maxLng = Math.max(maxLng, e.venue.longitude)
+    minLat = Math.min(minLat, e.venue.latitude)
+    maxLat = Math.max(maxLat, e.venue.latitude)
+  }
+  return [[minLng, minLat], [maxLng, maxLat]]
 }
 
 export default function EventMap() {
@@ -18,6 +30,7 @@ export default function EventMap() {
   const [selected, setSelected] = useState<Event | null>(null)
   const [error, setError] = useState<string | null>(null)
   const mapRef = useRef<MapRef>(null)
+  const boundsRef = useRef<LngLatBoundsLike | null>(null)
 
   useEffect(() => {
     fetch('/api/events')
@@ -29,6 +42,15 @@ export default function EventMap() {
       .catch(() => setError('Network error'))
   }, [])
 
+  // Fit map to all events once they load
+  useEffect(() => {
+    if (events.length === 0) return
+    const bounds = computeBounds(events)
+    if (!bounds) return
+    boundsRef.current = bounds
+    mapRef.current?.fitBounds(bounds, { padding: 60, duration: 800, maxZoom: 13 })
+  }, [events])
+
   const selectEvent = useCallback((event: Event) => {
     setSelected(event)
     mapRef.current?.flyTo({
@@ -36,6 +58,13 @@ export default function EventMap() {
       zoom: 14,
       duration: 600,
     })
+  }, [])
+
+  const resetView = useCallback(() => {
+    setSelected(null)
+    if (boundsRef.current) {
+      mapRef.current?.fitBounds(boundsRef.current, { padding: 60, duration: 600, maxZoom: 13 })
+    }
   }, [])
 
   const handlePopupClose = useCallback(() => setSelected(null), [])
@@ -95,7 +124,7 @@ export default function EventMap() {
       <div style={{ flex: 1, position: 'relative' }}>
         <Map
           ref={mapRef}
-          initialViewState={INITIAL_VIEW}
+          initialViewState={FALLBACK_VIEW}
           style={{ width: '100%', height: '100%' }}
           mapStyle="mapbox://styles/mapbox/dark-v11"
           mapboxAccessToken={MAPBOX_TOKEN}
@@ -148,6 +177,31 @@ export default function EventMap() {
             </Popup>
           )}
         </Map>
+
+        {/* Reset view button — sits below the NavigationControl (+/- buttons) */}
+        <button
+          onClick={resetView}
+          title="Reset view"
+          style={{
+            position: 'absolute',
+            top: 110,
+            right: 10,
+            width: 30,
+            height: 30,
+            background: '#fff',
+            border: 'none',
+            borderRadius: 4,
+            boxShadow: '0 0 0 2px rgba(0,0,0,0.2)',
+            cursor: 'pointer',
+            fontSize: 16,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 0,
+          }}
+        >
+          ⊙
+        </button>
 
         {error && (
           <div style={{

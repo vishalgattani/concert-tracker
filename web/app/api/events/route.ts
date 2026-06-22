@@ -11,11 +11,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: false, message: 'No API keys configured' }, { status: 503 })
   }
 
-  const { searchParams } = req.nextUrl
-  const city = searchParams.get('city') ?? 'San Francisco'
-
   const [tmResult, edtResult] = await Promise.allSettled([
-    tmKey ? fetchTM(tmKey, city) : Promise.resolve([] as Event[]),
+    tmKey ? fetchTM(tmKey) : Promise.resolve([] as Event[]),
     edtKey ? fetchEDT(edtKey) : Promise.resolve([] as Event[]),
   ])
 
