@@ -9,6 +9,7 @@ import DeployCountdown from './DeployCountdown'
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN!
 const MAX_RADIUS_MILES = 50
+const SETLIST_FETCH_INTERVAL_MS = 650 // ~1.5/sec, safely under 2/sec limit
 
 const FALLBACK_VIEW = { longitude: -122.15, latitude: 37.55, zoom: 9 }
 
@@ -55,7 +56,17 @@ export default function EventMap() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
 
-  // Setlist enrichment for selected event popup
+  // Filter dropdown
+  const [filterOpen, setFilterOpen] = useState(false)
+  const [filterHasSetlist, setFilterHasSetlist] = useState(false)
+
+  // Setlist cache keyed by artist name: true = has setlist, false = none, undefined = unchecked
+  const setlistCacheRef = useRef<Record<string, boolean>>({})
+  // Tick state to trigger re-renders as the background fetch populates the cache
+  const [cacheTick, setCacheTick] = useState(0)
+  const bumpCache = useCallback(() => setCacheTick((n) => n + 1), [])
+
+  // Setlist popup state for selected event
   const [setlists, setSetlists] = useState<SetlistEntry[] | null>(null)
   const [setlistLoading, setSetlistLoading] = useState(false)
 
@@ -80,7 +91,6 @@ export default function EventMap() {
       .catch(() => setError('Network error'))
   }, [])
 
-  // Fit map to all default events once loaded
   useEffect(() => {
     if (events.length === 0) return
     const bounds = computeBounds(events)
@@ -89,9 +99,41 @@ export default function EventMap() {
     mapRef.current?.fitBounds(bounds, { padding: 60, duration: 800, maxZoom: 13 })
   }, [events])
 
-  // Fetch setlist when an event is selected.
-  // 400ms debounce + AbortController: quick popup closes skip the API call entirely,
-  // keeping usage well under setlist.fm's 1440/day limit.
+  // Background fetch queue: runs when filterHasSetlist is enabled.
+  // Throttled to SETLIST_FETCH_INTERVAL_MS per request (~1.5/sec < 2/sec limit).
+  // Results are cached by artist name so toggling the filter again is instant.
+  const displayEvents = radiusEvents ?? events
+  useEffect(() => {
+    if (!filterHasSetlist) return
+    let cancelled = false
+
+    const unchecked = displayEvents.filter((e) => !(e.name in setlistCacheRef.current))
+    if (unchecked.length === 0) return
+
+    const run = async (idx: number) => {
+      if (cancelled || idx >= unchecked.length) return
+      const event = unchecked[idx]
+      if (event.name in setlistCacheRef.current) {
+        run(idx + 1)
+        return
+      }
+      try {
+        const res = await fetch(`/api/setlist?artist=${encodeURIComponent(event.name)}`)
+        const body = await res.json()
+        const hasSetlist = body.success && (body.setlists as SetlistEntry[]).length > 0
+        setlistCacheRef.current[event.name] = hasSetlist
+      } catch {
+        setlistCacheRef.current[event.name] = false
+      }
+      bumpCache()
+      if (!cancelled) setTimeout(() => run(idx + 1), SETLIST_FETCH_INTERVAL_MS)
+    }
+
+    run(0)
+    return () => { cancelled = true }
+  }, [filterHasSetlist, displayEvents, bumpCache])
+
+  // Popup setlist fetch — debounced 400ms, also populates the cache
   useEffect(() => {
     if (!selected) { setSetlists(null); return }
     setSetlists(null)
@@ -101,12 +143,18 @@ export default function EventMap() {
       setSetlistLoading(true)
       fetch(`/api/setlist?artist=${encodeURIComponent(selected.name)}`, { signal: controller.signal })
         .then((r) => r.json())
-        .then((body) => setSetlists(body.success ? body.setlists : []))
+        .then((body) => {
+          const results: SetlistEntry[] = body.success ? body.setlists : []
+          setSetlists(results)
+          // Populate cache so the filter knows this artist's status
+          setlistCacheRef.current[selected.name] = results.length > 0
+          bumpCache()
+        })
         .catch((err) => { if (err.name !== 'AbortError') setSetlists([]) })
         .finally(() => setSetlistLoading(false))
     }, 400)
     return () => { clearTimeout(timer); controller.abort() }
-  }, [selected?.id])
+  }, [selected?.id, bumpCache])
 
   const selectEvent = useCallback((event: Event) => {
     setSelected(event)
@@ -162,7 +210,6 @@ export default function EventMap() {
     dragRef.current.active = false
     const { center, miles } = dragRef.current
     if (miles < 0.5) return
-
     setRadiusLoading(true)
     try {
       const res = await fetch(`/api/events?lat=${center[1]}&lng=${center[0]}&radius=${miles.toFixed(2)}`)
@@ -177,15 +224,20 @@ export default function EventMap() {
     }
   }, [])
 
-  const displayEvents = radiusEvents ?? events
-
-  // Filter sidebar list by search query (map markers unchanged)
+  // Derive filtered sidebar list (map markers always show displayEvents)
   const q = searchQuery.toLowerCase().trim()
-  const filteredEvents = q
-    ? displayEvents.filter((e) =>
-        e.name.toLowerCase().includes(q) || e.venue.name.toLowerCase().includes(q),
-      )
-    : displayEvents
+  const checkedCount = displayEvents.filter((e) => e.name in setlistCacheRef.current).length
+  const isScanning = filterHasSetlist && checkedCount < displayEvents.length
+
+  // cacheTick is consumed here to ensure re-render when cache updates
+  void cacheTick
+  const filteredEvents = displayEvents.filter((e) => {
+    const matchesSearch = !q || e.name.toLowerCase().includes(q) || e.venue.name.toLowerCase().includes(q)
+    const matchesSetlist = !filterHasSetlist || setlistCacheRef.current[e.name] === true
+    return matchesSearch && matchesSetlist
+  })
+
+  const activeFilters = filterHasSetlist ? 1 : 0
 
   return (
     <div style={{ display: 'flex', width: '100vw', height: '100vh' }}>
@@ -199,15 +251,16 @@ export default function EventMap() {
               {radiusEvents !== null ? 'RADIUS RESULTS' : 'NEXT 7 DAYS'}
               {' '}
               <span style={{ color: '#555', fontWeight: 400 }}>
-                ({filteredEvents.length}{q && filteredEvents.length !== displayEvents.length ? `/${displayEvents.length}` : ''})
+                ({filteredEvents.length}{(q || filterHasSetlist) && filteredEvents.length !== displayEvents.length ? `/${displayEvents.length}` : ''})
               </span>
             </span>
             <button onClick={() => setSidebarOpen(false)} style={{ background: 'none', border: 'none', color: '#555', cursor: 'pointer', fontSize: 16, padding: '0 0 0 8px', lineHeight: 1 }}>✕</button>
           </div>
 
-          {/* Search bar */}
-          <div style={{ padding: '8px 10px', borderBottom: '1px solid #1a1a1a', flexShrink: 0 }}>
-            <div style={{ position: 'relative' }}>
+          {/* Search + filter bar */}
+          <div style={{ padding: '8px 10px', borderBottom: '1px solid #1a1a1a', flexShrink: 0, display: 'flex', gap: 6 }}>
+            {/* Search input */}
+            <div style={{ position: 'relative', flex: 1 }}>
               <span style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#555', fontSize: 13, pointerEvents: 'none' }}>🔍</span>
               <input
                 type="text"
@@ -216,26 +269,82 @@ export default function EventMap() {
                 placeholder="Search artist or venue…"
                 style={{
                   width: '100%', background: '#1a1a1a', border: '1px solid #2a2a2a',
-                  borderRadius: 6, padding: '7px 28px 7px 28px', fontSize: 13, color: '#eee',
+                  borderRadius: 6, padding: '7px 24px 7px 28px', fontSize: 13, color: '#eee',
                   outline: 'none', boxSizing: 'border-box',
                 }}
               />
               {searchQuery && (
-                <button
-                  onClick={() => setSearchQuery('')}
-                  style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#555', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 2 }}
-                >
-                  ✕
-                </button>
+                <button onClick={() => setSearchQuery('')} style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#555', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 2 }}>✕</button>
+              )}
+            </div>
+
+            {/* Filter button */}
+            <div style={{ position: 'relative', flexShrink: 0 }}>
+              <button
+                onClick={() => setFilterOpen((o) => !o)}
+                title="Filters"
+                style={{
+                  height: '100%', minHeight: 34, padding: '0 10px',
+                  background: activeFilters > 0 ? '#0070f3' : '#1a1a1a',
+                  border: `1px solid ${activeFilters > 0 ? '#0070f3' : '#2a2a2a'}`,
+                  borderRadius: 6, cursor: 'pointer', color: activeFilters > 0 ? '#fff' : '#888',
+                  fontSize: 14, display: 'flex', alignItems: 'center', gap: 4,
+                }}
+              >
+                ⊿{activeFilters > 0 && <span style={{ fontSize: 11, fontWeight: 700 }}>{activeFilters}</span>}
+              </button>
+
+              {/* Filter dropdown */}
+              {filterOpen && (
+                <div style={{
+                  position: 'absolute', top: 'calc(100% + 4px)', right: 0,
+                  background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: 8,
+                  padding: '10px 14px', minWidth: 200, zIndex: 20,
+                  boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+                }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#555', letterSpacing: '0.05em', marginBottom: 8 }}>FILTERS</div>
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', fontSize: 13, color: '#ccc' }}>
+                    <input
+                      type="checkbox"
+                      checked={filterHasSetlist}
+                      onChange={(e) => { setFilterHasSetlist(e.target.checked); setFilterOpen(false) }}
+                      style={{ marginTop: 2, accentColor: '#0070f3' }}
+                    />
+                    <span>
+                      Has recorded setlist
+                      <span style={{ display: 'block', fontSize: 11, color: '#555', marginTop: 2 }}>
+                        Only show artists with past setlists on setlist.fm
+                      </span>
+                    </span>
+                  </label>
+                </div>
               )}
             </div>
           </div>
+
+          {/* Scanning progress bar */}
+          {isScanning && (
+            <div style={{ padding: '6px 10px', borderBottom: '1px solid #1a1a1a', flexShrink: 0 }}>
+              <div style={{ fontSize: 11, color: '#555', marginBottom: 4 }}>
+                Checking setlists… {checkedCount}/{displayEvents.length}
+              </div>
+              <div style={{ height: 2, background: '#222', borderRadius: 1 }}>
+                <div style={{
+                  height: '100%', borderRadius: 1, background: '#0070f3',
+                  width: `${(checkedCount / displayEvents.length) * 100}%`,
+                  transition: 'width 0.3s ease',
+                }} />
+              </div>
+            </div>
+          )}
 
           {/* Event list */}
           <div style={{ overflowY: 'auto', flex: 1 }}>
             {filteredEvents.length === 0 && (
               <div style={{ padding: '16px', fontSize: 13, color: '#666' }}>
                 {radiusLoading ? 'Searching…'
+                  : isScanning ? 'Scanning for setlists…'
+                  : filterHasSetlist && !isScanning ? 'No events with recorded setlists found.'
                   : q ? `No results for "${searchQuery}"`
                   : radiusMode && radiusCenter ? 'No events in this radius.'
                   : 'No events found.'}
@@ -249,7 +358,14 @@ export default function EventMap() {
                   borderBottom: '1px solid #1a1a1a', borderLeft: isSelected ? '3px solid #0070f3' : '3px solid transparent',
                   padding: '12px 14px', cursor: 'pointer', color: '#eee', width: '100%',
                 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 3 }}>{event.name}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 4 }}>
+                    <span>{event.name}</span>
+                    {setlistCacheRef.current[event.name] === true && (
+                      <span title="Has recorded setlist on setlist.fm" style={{ fontSize: 10, background: '#1a2a1a', color: '#4ade80', border: '1px solid #166534', borderRadius: 4, padding: '1px 5px', flexShrink: 0, marginTop: 1 }}>
+                        SETLIST
+                      </span>
+                    )}
+                  </div>
                   <div style={{ fontSize: 12, color: '#888' }}>{event.venue.name}</div>
                   <div style={{ fontSize: 12, color: '#666', marginTop: 2 }}>
                     {event.date} · {event.startTime ? event.startTime.slice(0, 5) : 'TBA'}
@@ -264,7 +380,8 @@ export default function EventMap() {
       </div>
 
       {/* Map */}
-      <div style={{ flex: 1, position: 'relative', cursor: radiusMode ? 'crosshair' : 'default' }}>
+      <div style={{ flex: 1, position: 'relative', cursor: radiusMode ? 'crosshair' : 'default' }}
+        onClick={() => filterOpen && setFilterOpen(false)}>
         <Map
           ref={mapRef}
           initialViewState={FALLBACK_VIEW}
@@ -278,7 +395,6 @@ export default function EventMap() {
         >
           <NavigationControl position="top-right" showCompass={false} />
 
-          {/* Radius circle overlay */}
           {radiusCenter && radiusMiles > 0 && (
             <Source id="radius-circle" type="geojson" data={makeCircleGeoJSON(radiusCenter, radiusMiles) as never}>
               <Layer id="radius-fill" type="fill" paint={{ 'fill-color': '#0070f3', 'fill-opacity': 0.1 }} />
@@ -317,11 +433,8 @@ export default function EventMap() {
                   Buy tickets →
                 </a>
 
-                {/* Setlist.fm enrichment */}
                 <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid #eee' }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: '#999', letterSpacing: '0.05em', marginBottom: 5 }}>
-                    RECENT SETLISTS
-                  </div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#999', letterSpacing: '0.05em', marginBottom: 5 }}>RECENT SETLISTS</div>
                   {setlistLoading && <div style={{ fontSize: 12, color: '#aaa' }}>Loading…</div>}
                   {!setlistLoading && setlists !== null && setlists.length === 0 && (
                     <div style={{ fontSize: 12, color: '#bbb' }}>No setlists found on setlist.fm</div>
@@ -335,9 +448,7 @@ export default function EventMap() {
                       {sl.songs.length > 0 ? (
                         <div style={{ fontSize: 12, color: '#444', lineHeight: 1.5 }}>
                           {sl.songs.slice(0, 5).join(' · ')}
-                          {sl.songs.length > 5 && (
-                            <span style={{ color: '#aaa' }}> +{sl.songs.length - 5} more</span>
-                          )}
+                          {sl.songs.length > 5 && <span style={{ color: '#aaa' }}> +{sl.songs.length - 5} more</span>}
                         </div>
                       ) : (
                         <div style={{ fontSize: 12, color: '#bbb' }}>Setlist not recorded</div>
@@ -350,33 +461,26 @@ export default function EventMap() {
           )}
         </Map>
 
-        {/* Sidebar toggle */}
         <button onClick={() => setSidebarOpen((o) => !o)} title={sidebarOpen ? 'Hide event list' : 'Show event list'} style={{
           position: 'absolute', top: 50, left: 10,
-          background: sidebarOpen ? '#222' : '#fff',
-          color: sidebarOpen ? '#eee' : '#333',
+          background: sidebarOpen ? '#222' : '#fff', color: sidebarOpen ? '#eee' : '#333',
           border: 'none', borderRadius: 6, padding: '7px 12px',
           fontSize: 13, fontWeight: 600, cursor: 'pointer',
-          boxShadow: '0 0 0 2px rgba(0,0,0,0.2)',
-          display: 'flex', alignItems: 'center', gap: 6,
+          boxShadow: '0 0 0 2px rgba(0,0,0,0.2)', display: 'flex', alignItems: 'center', gap: 6,
         }}>
           ☰ {sidebarOpen ? 'Hide List' : 'Show List'}{!sidebarOpen && displayEvents.length > 0 ? ` (${displayEvents.length})` : ''}
         </button>
 
-        {/* Radius mode toggle */}
         <button onClick={toggleRadiusMode} title={radiusMode ? 'Exit radius search' : 'Draw radius to search'} style={{
           position: 'absolute', top: 10, left: 10,
-          background: radiusMode ? '#0070f3' : '#fff',
-          color: radiusMode ? '#fff' : '#333',
+          background: radiusMode ? '#0070f3' : '#fff', color: radiusMode ? '#fff' : '#333',
           border: 'none', borderRadius: 6, padding: '7px 12px',
           fontSize: 13, fontWeight: 600, cursor: 'pointer',
-          boxShadow: '0 0 0 2px rgba(0,0,0,0.2)',
-          display: 'flex', alignItems: 'center', gap: 6,
+          boxShadow: '0 0 0 2px rgba(0,0,0,0.2)', display: 'flex', alignItems: 'center', gap: 6,
         }}>
           ⊙ {radiusMode ? 'Exit Radius Search' : 'Radius Search'}
         </button>
 
-        {/* Live radius readout */}
         {radiusMode && radiusMiles > 0.5 && (
           <div style={{
             position: 'absolute', top: 90, left: 10,
@@ -387,10 +491,8 @@ export default function EventMap() {
           </div>
         )}
 
-        {/* Deploy countdown — above zoom controls */}
         <DeployCountdown />
 
-        {/* Reset view — below zoom controls */}
         <button onClick={resetView} title="Reset view" style={{
           position: 'absolute', top: 160, right: 10,
           width: 30, height: 30, background: '#fff', border: 'none', borderRadius: 4,
