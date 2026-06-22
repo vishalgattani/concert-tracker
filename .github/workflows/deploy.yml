@@ -15,31 +15,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: web/package-lock.json
 
-      - name: Install dependencies
-        run: npm ci
-        working-directory: web
-
-      - name: Pull Vercel project settings
-        run: npx vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
-        working-directory: web
-        env:
-          VERCEL_ORG_ID: team_ScbUahw2QbWHpPXESXiLbexa
-          VERCEL_PROJECT_ID: prj_vq5kiT63LmCYz8g2hEaCZSYMageO
-
-      - name: Build
-        run: npx vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
-        working-directory: web
-        env:
-          VERCEL_ORG_ID: team_ScbUahw2QbWHpPXESXiLbexa
-          VERCEL_PROJECT_ID: prj_vq5kiT63LmCYz8g2hEaCZSYMageO
-          NEXT_PUBLIC_MAPBOX_TOKEN: ${{ secrets.NEXT_PUBLIC_MAPBOX_TOKEN }}
-
-      - name: Deploy prebuilt output
+      - name: Deploy to Vercel
         timeout-minutes: 10
-        run: npx vercel deploy --prebuilt --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
+        run: npx vercel --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
         working-directory: web
         env:
           VERCEL_ORG_ID: team_ScbUahw2QbWHpPXESXiLbexa
