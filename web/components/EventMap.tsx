@@ -43,6 +43,8 @@ export default function EventMap() {
   const mapRef = useRef<MapRef>(null)
   const boundsRef = useRef<LngLatBoundsLike | null>(null)
 
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+
   // Radius mode state
   const [radiusMode, setRadiusMode] = useState(false)
   const [radiusCenter, setRadiusCenter] = useState<[number, number] | null>(null)
@@ -151,11 +153,11 @@ export default function EventMap() {
   return (
     <div style={{ display: 'flex', width: '100vw', height: '100vh' }}>
       {/* Sidebar */}
-      <div style={{ width: 280, flexShrink: 0, background: '#111', color: '#eee', overflowY: 'auto', display: 'flex', flexDirection: 'column', zIndex: 1 }}>
-        <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid #222', fontSize: 13, fontWeight: 600, color: '#aaa', letterSpacing: '0.05em' }}>
-          {radiusEvents !== null
-            ? `RADIUS RESULTS (${displayEvents.length})`
-            : 'NEXT 7 DAYS'}
+      <div style={{ width: sidebarOpen ? 280 : 0, flexShrink: 0, background: '#111', color: '#eee', overflowY: 'auto', display: 'flex', flexDirection: 'column', zIndex: 1, transition: 'width 0.2s ease', overflow: 'hidden' }}>
+        <div style={{ width: 280, display: 'flex', flexDirection: 'column', flex: 1 }}>
+        <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid #222', fontSize: 13, fontWeight: 600, color: '#aaa', letterSpacing: '0.05em', display: 'flex', justifyContent: 'space-between', alignItems: 'center', whiteSpace: 'nowrap' }}>
+          <span>{radiusEvents !== null ? `RADIUS RESULTS (${displayEvents.length})` : 'NEXT 7 DAYS'}</span>
+          <button onClick={() => setSidebarOpen(false)} style={{ background: 'none', border: 'none', color: '#555', cursor: 'pointer', fontSize: 16, padding: '0 0 0 8px', lineHeight: 1 }}>✕</button>
         </div>
         {displayEvents.length === 0 && !error && (
           <div style={{ padding: '16px', fontSize: 13, color: '#666' }}>
@@ -180,6 +182,7 @@ export default function EventMap() {
             </button>
           )
         })}
+        </div>
       </div>
 
       {/* Map */}
@@ -241,6 +244,19 @@ export default function EventMap() {
           )}
         </Map>
 
+        {/* Sidebar toggle */}
+        <button onClick={() => setSidebarOpen((o) => !o)} title={sidebarOpen ? 'Hide event list' : 'Show event list'} style={{
+          position: 'absolute', top: 50, left: 10,
+          background: sidebarOpen ? '#222' : '#fff',
+          color: sidebarOpen ? '#eee' : '#333',
+          border: 'none', borderRadius: 6, padding: '7px 12px',
+          fontSize: 13, fontWeight: 600, cursor: 'pointer',
+          boxShadow: '0 0 0 2px rgba(0,0,0,0.2)',
+          display: 'flex', alignItems: 'center', gap: 6,
+        }}>
+          ☰ {sidebarOpen ? 'Hide List' : 'Show List'}{!sidebarOpen && displayEvents.length > 0 ? ` (${displayEvents.length})` : ''}
+        </button>
+
         {/* Radius mode toggle button */}
         <button onClick={toggleRadiusMode} title={radiusMode ? 'Exit radius search' : 'Draw radius to search'} style={{
           position: 'absolute', top: 10, left: 10,
@@ -257,7 +273,7 @@ export default function EventMap() {
         {/* Live radius readout while dragging */}
         {radiusMode && radiusMiles > 0.5 && (
           <div style={{
-            position: 'absolute', top: 50, left: 10,
+            position: 'absolute', top: 90, left: 10,
             background: 'rgba(0,0,0,0.75)', color: '#fff',
             borderRadius: 6, padding: '4px 10px', fontSize: 13, pointerEvents: 'none',
           }}>
