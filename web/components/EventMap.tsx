@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Map, { Marker, Popup, NavigationControl, Source, Layer } from 'react-map-gl'
-import type { MapRef, LngLatBoundsLike, MapLayerMouseEvent } from 'react-map-gl'
+import type { MapRef, LngLatBoundsLike, MapLayerMouseEvent, MapLayerTouchEvent } from 'react-map-gl'
 import type { Event } from '@/lib/events'
 import { haversineMiles } from '@/lib/events'
 import DeployCountdown from './DeployCountdown'
@@ -185,9 +185,9 @@ export default function EventMap() {
     }
   }, [])
 
-  const handleMouseDown = useCallback((e: MapLayerMouseEvent) => {
+  const handleDragStart = useCallback((lngLat: { lng: number; lat: number }) => {
     if (!radiusModeRef.current) return
-    const center: [number, number] = [e.lngLat.lng, e.lngLat.lat]
+    const center: [number, number] = [lngLat.lng, lngLat.lat]
     dragRef.current = { active: true, center, miles: 0 }
     setRadiusCenter(center)
     setRadiusMiles(0)
@@ -195,17 +195,17 @@ export default function EventMap() {
     setSelected(null)
   }, [])
 
-  const handleMouseMove = useCallback((e: MapLayerMouseEvent) => {
+  const handleDragMove = useCallback((lngLat: { lng: number; lat: number }) => {
     if (!radiusModeRef.current || !dragRef.current.active || !dragRef.current.center) return
     const dist = Math.min(
-      haversineMiles(dragRef.current.center[1], dragRef.current.center[0], e.lngLat.lat, e.lngLat.lng),
+      haversineMiles(dragRef.current.center[1], dragRef.current.center[0], lngLat.lat, lngLat.lng),
       MAX_RADIUS_MILES,
     )
     dragRef.current.miles = dist
     setRadiusMiles(dist)
   }, [])
 
-  const handleMouseUp = useCallback(async () => {
+  const handleDragEnd = useCallback(async () => {
     if (!radiusModeRef.current || !dragRef.current.active || !dragRef.current.center) return
     dragRef.current.active = false
     const { center, miles } = dragRef.current
@@ -223,6 +223,14 @@ export default function EventMap() {
       setRadiusLoading(false)
     }
   }, [])
+
+  const handleMouseDown = useCallback((e: MapLayerMouseEvent) => handleDragStart(e.lngLat), [handleDragStart])
+  const handleMouseMove = useCallback((e: MapLayerMouseEvent) => handleDragMove(e.lngLat), [handleDragMove])
+  const handleMouseUp = useCallback(() => handleDragEnd(), [handleDragEnd])
+
+  const handleTouchStart = useCallback((e: MapLayerTouchEvent) => handleDragStart(e.lngLat), [handleDragStart])
+  const handleTouchMove = useCallback((e: MapLayerTouchEvent) => handleDragMove(e.lngLat), [handleDragMove])
+  const handleTouchEnd = useCallback(() => handleDragEnd(), [handleDragEnd])
 
   // Derive filtered sidebar list (map markers always show displayEvents)
   const q = searchQuery.toLowerCase().trim()
@@ -389,9 +397,13 @@ export default function EventMap() {
           mapStyle="mapbox://styles/mapbox/dark-v11"
           mapboxAccessToken={MAPBOX_TOKEN}
           dragPan={!radiusMode}
+          dragRotate={false}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
         >
           <NavigationControl position="top-right" showCompass={false} />
 
