@@ -1,4 +1,5 @@
 import type { Event } from './events'
+import { haversineMiles } from './events'
 
 const EDT_BASE = 'https://edmtrain.com/api/events'
 
@@ -61,6 +62,18 @@ async function fetchLocation(
         source: 'EDMTrain' as const,
       }
     })
+}
+
+export async function fetchEventsRadius(
+  apiKey: string,
+  lat: number,
+  lng: number,
+  radiusMiles: number,
+  days = 7,
+): Promise<Event[]> {
+  const { start, end } = windowDates(days)
+  const events = await fetchLocation(apiKey, String(lat), String(lng), 'California', start, end)
+  return events.filter((e) => haversineMiles(lat, lng, e.venue.latitude, e.venue.longitude) <= radiusMiles)
 }
 
 export async function fetchEvents(apiKey: string, days = 7): Promise<Event[]> {

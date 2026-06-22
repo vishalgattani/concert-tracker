@@ -69,6 +69,39 @@ async function fetchCity(apiKey: string, city: string, startDT: string, endDT: s
   })
 }
 
+export async function fetchEventsRadius(
+  apiKey: string,
+  lat: number,
+  lng: number,
+  radiusMiles: number,
+  days = 7,
+): Promise<Event[]> {
+  const start = new Date()
+  const end = new Date(start)
+  end.setDate(end.getDate() + days - 1)
+
+  const params = new URLSearchParams({
+    apikey: apiKey,
+    latlong: `${lat},${lng}`,
+    radius: String(Math.ceil(radiusMiles)),
+    unit: 'miles',
+    classificationName: 'music',
+    startDateTime: tmDateTime(start),
+    endDateTime: tmDateTime(end, true),
+    size: '50',
+    sort: 'date,asc',
+  })
+
+  const res = await fetch(`${TM_BASE}?${params}`, { cache: 'no-store' })
+  if (!res.ok) return []
+  const data = await res.json()
+  const raw: unknown[] = data?._embedded?.events ?? []
+  return raw.flatMap((e) => {
+    const mapped = mapEvent(e as Record<string, unknown>)
+    return mapped ? [mapped] : []
+  })
+}
+
 export async function fetchEvents(apiKey: string, days = 7): Promise<Event[]> {
   const start = new Date()
   const end = new Date(start)
